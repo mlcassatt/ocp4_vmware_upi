@@ -1,0 +1,517 @@
+---
+- name: Prepare Openshift 4 on vSphere
+  hosts: localhost
+  connection: local
+  # become: true
+  # become_user: root
+  gather_facts: true
+
+  tasks:
+  - name: Remove install dir if old install exists
+    file:
+      path: "{{ install_dir }}"
+      state: absent
+
+  - name: Create install dir
+    file:
+      path: "{{ install_dir }}"
+      state: directory
+      mode: "0755"
+
+  - name: Create download dir
+    file:
+      path: "./{{ install_dir }}/downloads"
+      state: directory
+      mode: "0755"
+
+  - name: Generate SSH keys
+    openssh_keypair:
+      path: "{{ install_dir }}/id_ssh_rsa"
+      size: 2048
+
+  - name: Get host OS type
+    set_fact:
+      os: "{% if ansible_os_family=='Linux' %}linux{% elif ansible_os_family=='Darwin'%}mac{% else %}err{% endif %}"
+
+  - name: Download Openshift installer
+    get_url:
+      url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+      dest: "downloads/openshift-install-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+      mode: "0440"
+    when: not restricted 
+
+  - name: sync Download folder
+    synchronize: 
+      src: "downloads"
+      dest: "./"
+      use_ssh_args: true
+    when: restricted
+
+  - name: Download Openshift oc cli
+    get_url:
+      url: "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+      dest: "downloads/openshift-client-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+    when: not restricted
+
+  - name: Unpack Openshift Installer
+    unarchive:
+      src: "downloads/openshift-install-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+      dest: "."
+      remote_src: true
+      creates: /root/openshift-installer
+
+  - name: Unpack Openshift cli
+    unarchive:
+      src: "downloads/openshift-client-{{ ansible_system | lower }}-{{openshift_version}}.tar.gz"
+      dest: "."
+      remote_src: true
+      creates: /root/oc
+
+  - name: Check latest govmomi release
+    shell: "curl -s https://api.github.com/repos/vmware/govmomi/releases/latest | grep -i {{ ansible_system }} | grep amd64 | grep browser_download_url | cut -d : -f 2,3 | xargs"
+    register: json_reponse
+    when: not restricted
+
+  - name: Download latest govmomi release
+    get_url:
+      url: "{{ json_reponse.stdout }}"
+      dest: downloads/govc_linux_amd64.gz
+    when: not restricted
+
+  - name: Unpack govmomi
+    shell: "gunzip -c downloads/govc_linux_amd64.gz > govc && chmod +x govc && pwd"
+    register: shell_out
+
+  - name: Get generated SSH Key
+    slurp:
+      src: "{{ install_dir }}/id_ssh_rsa.pub"
+    register: sshkeyencoded
+
+  - name: Decode SSH key
+    set_fact:
+      sshkey: "{{ sshkeyencoded.content | b64decode }}"
+
+  - name: Read pull secret from "pullsecret.txt"
+   # Depends on jinja2_native = true setting in ansible.cfg
+   # Requires ansible 2.7
+    set_fact:
+      pullsecret: "{{ lookup('file', 'pullsecret.txt') }}"
+
+  - name: Create install config from template
+    template:
+      src: templates/install-config.yaml.j2
+      dest: "{{ install_dir }}/install-config.yaml"
+
+  - name: Generate manifests
+    command: ./openshift-install create manifests --dir={{ install_dir }}
+
+  - name: Set mastersSchedulable parameter to False
+    lineinfile:
+      path: "{{ install_dir }}/manifests/cluster-scheduler-02-config.yml"
+      regexp: "mastersSchedulable"
+      line: "  mastersSchedulable: False"
+
+  - name: Create NetworkPolicy Config
+    template:
+      src: templates/network-policy.yml.j2
+      dest: "{{ install_dir }}/manifests/cluster-network-03-config.yml"
+
+  - name: Generate ignition files
+    command: ./openshift-install create ignition-configs --dir={{ install_dir }}
+
+  - name: Create bootstrap-append file
+    template:
+      src: templates/append-bootstrap.ign.j2
+      dest: "{{ install_dir }}/append-bootstrap.ign"
+
+  - name: Generate base64 from ignition files
+    copy:
+      content: "{{ lookup('file', install_dir + '/' + item + '.ign') | b64encode }}"
+      dest: "{{ install_dir + '/' + item + '.64'}}"
+    loop:
+      - append-bootstrap
+      - master
+      - worker
+
+  - name: read base64 into variables
+    set_fact:
+      worker: "{{ lookup('file', install_dir + '/' + 'worker.ign') | b64encode }}"
+      bootstrap: "{{ lookup('file', install_dir + '/' + 'append-bootstrap.ign') | b64encode }}"
+      master: "{{ lookup('file', install_dir + '/' + 'master.ign') | b64encode }}"
+
+- name: Prepare Openshift 4 on vSphere
+  hosts: bastion
+  # become: true
+  # become_user: root
+  gather_facts: false
+
+  tasks:
+
+  - name: Make the bootstrap file available for install
+    synchronize: 
+      src: "{{ install_dir }}/bootstrap.ign"
+      dest: "/var/www/html/bootstrap.ign"
+      use_ssh_args: true
+#    when: os == "Linux"
+#    delegate_to: bastion
+
+- name: Instrument Vsphere
+  hosts: localhost
+  connection: local
+  # become: true
+  # become_user: root
+  gather_facts: true
+
+  tasks:
+
+  - name: Download Openshift OVA
+    get_url:
+      url: https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/{{  openshift_version.split(".")[0] }}.{{ openshift_version.split(".")[1]  }}/latest/rhcos-{{  openshift_version.split(".")[0] }}.{{ openshift_version.split(".")[1]  }}.0-x86_64-vmware.ova
+      dest: "{{ playbook_dir }}/downloads/rhcos-{{  openshift_version.split('.')[0] }}.{{ openshift_version.split('.')[1]  }}.0-x86_64-vmware.ova"
+      mode: "0440"
+    tags:
+      - vcenter
+    when: not restricted
+
+  - name: Setup NTP for vmware server so certificates work
+    vmware_host_ntp:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      esxi_hostname: "{{ vcenter_esxi_hostname }}"
+      validate_certs: no
+      ntp_servers:
+        - "{{ ntp_servers }}"
+    delegate_to: localhost
+
+  - name: Remove potential old OVF
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: OCP
+      name: "{{ item }}"
+      state: absent
+      force: True
+    delegate_to: localhost
+    with_items:
+      - ocp4-bootstrap
+      - ocp4-master0
+      - ocp4-master1
+      - ocp4-master2
+      - ocp4-compute0
+      - ocp4-compute1
+    tags: [ "vcenter", "cleanup" ]
+
+  - name: Remove potential old OVF
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: OCP
+#      folder: "{{ vm_folder_creation_result.result.path }}"
+      name: OCP-Nodes
+      state: absent
+      template: OCP-Nodes
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Create a folder on VCenter for Openshift
+    vcenter_folder:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      datacenter: "{{ vcenter_datacenter }}"
+      validate_certs: no
+      folder_name: OCP
+      folder_type: vm
+      state: present
+    register: vm_folder_creation_result
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Deploy VMware template from Downloaded OVA
+    vmware_deploy_ovf:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      ovf: "{{ playbook_dir }}/downloads/rhcos-4.2.0-x86_64-vmware.ova"
+      cluster: "{{ vcenter_cluster }}"
+      datacenter: "{{ vcenter_datacenter }}"
+      datastore: "{{ vcenter_datastore }}"
+      name: OCP-Nodes
+      folder: "{{ vm_folder_creation_result.result.path }}"
+      networks: "{u'VM Network':u'{{ vcenter_network }}'}"
+      disk_provisioning: thin
+      power_on: no
+    tags:
+      - vcenter
+    delegate_to: localhost
+    register: instance
+
+  - name: Create a virtual machine for Bootstrap-node
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: "{{ vm_folder_creation_result.result.path }}"
+      name: ocp4-bootstrap
+      state: poweredoff
+      template: OCP-Nodes
+      disk:
+      - size_gb: 120
+        type: thin
+        datastore: "{{ vcenter_datastore }}"
+      hardware:
+        memory_gb: 16
+        num_cpus: 4
+        memory_reservation_lock: True
+        version: 13 # Hardware version of virtual machine
+      networks:
+      - name: "{{ vcenter_network }}"
+      customvalues:
+        - key: guestinfo.ignition.config.data.encoding
+          value: "base64"
+        - key: guestinfo.ignition.config.data
+#          value: "{{ files.results.append-bootstrap.content }}"
+          value: "{{ bootstrap }}"
+        - key: disk.EnableUUID
+          value: "TRUE"
+    register: bootstrap
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Create a virtual machine for Master-nodes
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: "{{ vm_folder_creation_result.result.path }}"
+      name: ocp4-master{{ item }}
+      state: poweredoff
+      template: OCP-Nodes
+      disk:
+      - size_gb: 120
+        type: thin
+        datastore: "{{ vcenter_datastore }}"
+      hardware:
+        memory_gb: "{{ master_mem }}"
+        num_cpus: "{{ master_cpu }}"
+        memory_reservation_lock: True
+        version: 13 # Hardware version of virtual machine
+      networks:
+      - name: "{{ vcenter_network }}"
+      customvalues:
+        - key: guestinfo.ignition.config.data.encoding
+          value: "base64"
+        - key: guestinfo.ignition.config.data
+#          value: "{{ files.results.master.content }}"
+          value: "{{ master }}"
+        - key: disk.EnableUUID
+          value: "TRUE"
+    register: controlplane
+    loop:
+      - 0
+      - 1
+      - 2
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Create a virtual machine for Infra nodes
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: "{{ vm_folder_creation_result.result.path }}"
+      name: ocp4-compute{{ item }}
+      state: poweredoff
+      template: OCP-Nodes
+      disk:
+      - size_gb: 120
+        type: thin
+        datastore: "{{ vcenter_datastore }}"
+      hardware:
+        memory_gb: "{{ infra_mem }}"
+        num_cpus: "{{ infra_cpu }}"
+        scsi: paravirtual
+        memory_reservation_lock: True
+        version: 13 # Hardware version of virtual machine
+      networks:
+      - name: "{{ vcenter_network }}"
+      customvalues:
+        - key: guestinfo.ignition.config.data.encoding
+          value: "base64"
+        - key: guestinfo.ignition.config.data
+#          value: "{{ files.results.worker.content }}"
+          value: "{{ worker }}"
+        - key: disk.EnableUUID
+          value: "TRUE"
+    register: controlplane
+    with_sequence: start=0 count="{{ infra_qty }}"
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Set VM latency sensitivity parameter to High
+    # Use govc as ansible doesnt't support this yet
+    # vim.LatencySensitivity.SensitivityLevel=high
+    # TODO - Test
+    command: "/work/govc vm.change -vm {{ item }} -latency high"
+    loop:
+      - ocp4-bootstrap
+      - ocp4-master0
+      - ocp4-master1
+      - ocp4-master2
+      - ocp4-compute0
+      - ocp4-compute1
+    environment:
+      GOVC_DATACENTER: "{{ vcenter_datacenter }}"
+      GOVC_URL: "https://{{ vcenter_user }}:{{ vcenter_pwd }}@{{ vcenter_ip }}/sdk"
+      GOVC_DATASTORE: "{{ vcenter_datastore }}"
+#      GOVC_RESOURCE_POOL=monster.ad.lab.gosddc.com/Resources
+#      GOVC_GUEST_LOGIN=kube:kube
+      GOVC_INSECURE: true
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+
+- name: Prepare Openshift 4 DHCP server
+  hosts: dhcpservers
+  become: true
+  become_user: root
+  gather_facts: false
+  tasks:
+
+  - name: Install DHCP server
+    package:
+      name: dhcp
+      state: latest
+
+
+  - name: Get MAC Addresses from VMs
+    # Store into mac_addresses variable
+    vmware_vm_info:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+    register: vm_info
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: set macs from vm pull
+    set_fact:
+      OCPBootstrapmac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-bootstrap'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+      OCPMaster0mac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-master0'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+      OCPMaster1mac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-master1'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+      OCPMaster2mac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-master2'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+      OCPInfra0mac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-compute0'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+      OCPInfra1mac: "{{ vm_info.virtual_machines | json_query(\"[?guest_name=='ocp4-compute1'].mac_address\") | to_yaml | regex_search('(([a-f0-9]{2}:){5}[a-f0-9]{2})') }}"
+
+  - name: get macs
+    debug:
+      msg: "OCP4 info is: {{ OCPBootstrapmac }}"
+
+  - name: Generate DHCP server config
+    template:
+      src: templates/dhcpd.conf.j2
+      dest: /etc/dhcp/dhcpd.conf
+
+  - name: Open Firewall for dhcp access
+    become: true
+    firewalld:
+      service: dhcp
+      permanent: true
+      state: enabled
+    register: firewall_dhcp
+
+  - name: Restart DHCP Server after config
+    systemd:
+      name: "dhcpd"
+      state: restarted
+      enabled: yes
+    become: yes
+    tags:
+      - vcenter
+
+- name: Start VMs and Deploy OCP
+  hosts: localhost
+  connection: local
+  # become: true
+  # become_user: root
+  gather_facts: true
+
+  tasks:
+  - name: Set the state of a Virtual Machines to poweron
+    vmware_guest_powerstate:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      validate_certs: no
+      folder: "{{ vm_folder_creation_result.result.path }}"
+      name: "{{ item }}"
+      state: powered-on
+    register: power_on
+    loop:
+      - ocp4-bootstrap
+      - ocp4-master0
+      - ocp4-master1
+      - ocp4-master2
+      - ocp4-compute0
+      - ocp4-compute1
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+  - name: Wait 5min for VMs to start
+    wait_for:
+      timeout: 300
+
+  - name: Complete cluster bootstrap
+    command: ./openshift-install --dir={{ install_dir }} wait-for bootstrap-complete --log-level=info
+
+  - name: Remove the Bootstrap-node
+    vmware_guest:
+      hostname: "{{ vcenter_ip }}"
+      username: "{{ vcenter_user }}"
+      password: "{{ vcenter_pwd }}"
+      datacenter: "{{ vcenter_datacenter }}"
+      validate_certs: no
+      name: ocp4-bootstrap
+      state: absent
+      force: True
+    tags:
+      - vcenter
+    delegate_to: localhost
+
+#  - debug:
+#      msg: "Finish install by configuring the Image Registry storage and run openshift-install --dir={{ install_dir }} wait-for install-complete"
+
+#   - name: Complete cluster creation
+#     command: "openshift-install --dir={{ install_dir }} wait-for install-complete"
+
+  - debug:
+      msg: "Cluster done! Remove the Bootstrap VM IP from the Control-Plane Load-balancer."
+
+  # - name: Patch registry deployment with emptyDir
+  #   command: oc patch configs.imageregistry.operator.openshift.io cluster --type merge --patch '{"spec":{"storage":{"emptyDir":{}}}}'
+  #   delegate_to: localhost
+
+

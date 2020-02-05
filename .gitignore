@@ -1,0 +1,13 @@
+installer
+downloads
+oc
+kubectl
+openshift-install
+govmomi
+inventory
+inventory.yml
+pullsecret.txt
+id_rsa.ansible
+id_rsa.ansible.pub
+todo
+

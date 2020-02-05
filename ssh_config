@@ -1,0 +1,4 @@
+Host *
+  IdentityFile ./id_rsa.ansible
+  ForwardAgent yes
+  StrictHostKeyChecking no

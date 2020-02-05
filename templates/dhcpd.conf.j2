@@ -1,0 +1,63 @@
+# dhcpd.conf
+#
+# Sample configuration file for ISC dhcpd
+#
+
+# option definitions common to all supported networks...
+option domain-name "{{ clustername }}.{{ basedomain }}";
+option domain-name-servers {{ dns_server }};
+option ntp-servers {{ ntp_servers }}; 
+option time-offset 0;
+
+default-lease-time 600;
+max-lease-time 7200;
+
+# Use this to enble / disable dynamic dns updates globally.
+#ddns-update-style none;
+
+# If this DHCP server is the official DHCP server for the local
+# network, the authoritative directive should be uncommented.
+#authoritative;
+
+# Use this to send dhcp log messages to a different log file (you also
+# have to hack syslog.conf to complete the redirection).
+log-facility local7;
+
+# No service will be given on this subnet, but declaring it helps the
+# DHCP server to understand the network topology.
+
+subnet {{ dhcp_subnet }} netmask {{ dhcp_netmask }} { 
+  option routers {{ default_gw }}; 
+}
+
+
+host OCP-Bootstrap {
+   option host-name "ocp4-bootstrap.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPBootstrapmac }};
+   fixed-address {{ bootstrapIp }};
+}
+host OCP-Master-0 {
+   option host-name "ocp4-master0.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPMaster0mac }};
+   fixed-address {{ master0Ip }};
+}
+host OCP-Master-1 {
+   option host-name "ocp4-master1.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPMaster1mac }};
+   fixed-address {{ master1Ip }};
+}
+host OCP-Master-2 {
+   option host-name "ocp4-master2.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPMaster2mac }};
+   fixed-address {{ master2Ip }};
+}
+host OCP-Infra-0 {
+   option host-name "ocp4-compute0.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPInfra0mac }};
+   fixed-address {{ infra0Ip }};
+}
+host OCP-Infra-1 {
+   option host-name "ocp4-compute1.{{ clustername }}.{{ basedomain }}";
+   hardware ethernet {{ OCPInfra1mac }};
+   fixed-address {{ infra1Ip }};
+}

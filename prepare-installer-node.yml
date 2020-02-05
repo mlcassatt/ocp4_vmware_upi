@@ -1,0 +1,43 @@
+---
+- name: Prepare Openshift 4 HTTP node
+  hosts: bastion 
+  gather_facts: false
+
+  tasks:
+  - name: Install HTTP server
+    package:
+      name: httpd
+      state: latest
+    tags:
+      - server
+
+  - name: Check HTTP server config
+    lineinfile:
+      path: /etc/httpd/conf/httpd.conf
+      regexp: '^Listen '
+      insertafter: '^#Listen '
+      line: Listen 0.0.0.0:80
+
+  - name: Open Firewall port 80 for http access
+    become: true
+    firewalld:
+      service: http
+      permanent: true
+      state: enabled
+    register: firewall_http
+
+  - name: Restart the Firewall service
+    become: true
+    service:
+      name: firewalld
+      state: restarted
+    when: firewall_http.changed
+
+  - name: Start and enable HTTP services
+    systemd:
+        name: "httpd"
+        state: started
+        enabled: yes
+    tags:
+      - server
+
