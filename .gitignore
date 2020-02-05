@@ -10,4 +10,5 @@ pullsecret.txt
 id_rsa.ansible
 id_rsa.ansible.pub
 todo
-
+.openshift_install.log
+.bashrc
