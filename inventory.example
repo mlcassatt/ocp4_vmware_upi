@@ -1,0 +1,70 @@
+[dhcpservers]
+dhcpserver ansible_host=<insert dhcp server ip>
+
+[bastions]
+bastion ansible_host=<insert bastion server ip>
+
+[proxies]
+haproxy ansible_host=<insert haproxy server ip>
+
+[all:vars]
+ansible_connection=ssh
+
+ntp_servers=<ntp server>
+
+# Restricted environment, bring your own binaries/files and place them in "downloads" to include:
+#  downloads/openshift-install-{{os}}-{{openshift_version}}.tar.gz
+restricted=True
+
+# Define binary versions
+openshift_version="4.2.13"
+install_dir=installer
+
+# Cluster parameters
+# Save downloaded pull secret in a file called pullsecret.txt
+basedomain=base.domain
+clustername=cluster-name
+pod_cidr=192.168.0.0/16
+machine_cidr=10.15.74.0/23
+service_cidr=172.30.0.0/16
+host_prefix=23
+dhcp_subnet=<dhcp subnet x.x.x.0 ideally>
+dhcp_netmask=255.255.255.0
+default_gw=<default gw for cluster>
+dns_server=<dns server for cluster>
+
+# Leave proxy variables blank if no proxy is used
+httpProxy=
+httpsProxy=
+noProxy=
+; httpProxy=http://<username>:<pswd>@<ip>:<port>
+; httpsProxy=http://<username>:<pswd>@<ip>:<port>
+; noProxy=example.com,example2.com
+
+# Node sizes
+master_cpu=4
+master_mem=16
+infra_cpu=8
+infra_mem=32
+infra_qty=2
+
+# new way of defining hosts
+
+# Reserved IP Addresses
+bootstrapIp=
+master0Ip=
+master1Ip=
+master2Ip=
+infra0Ip=
+infra1Ip=
+
+# vCenter Connection and parameters
+vcenter_esxi_hostname=<esxi host server in the cluster>
+vcenter_ip=
+vcenter_user=<user with necessary privs in vmware>
+vcenter_pwd=<password for respective user>
+vcenter_cluster=<cluster name>
+vcenter_datacenter=<datacenter name>
+vcenter_datastore=<datacenter datastore>
+vcenter_network=<datacenter network to utilize>
+
