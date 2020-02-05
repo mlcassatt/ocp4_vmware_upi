@@ -5,6 +5,7 @@
  * HAProxy configured appropriately (to be automated)
  * System identified as DHCP server with package management and build as RHEL 7.6+
  * ssh-keys configured to each host for Ansible automation
+ * pullsecret.txt contains your pull secret from: https://cloud.redhat.com/openshift/install/vsphere/user-provisioned
 
 We'll either build or make use of my shared ubi8-based container running pyvmomi and Ansible appropriate with all required dependencies
 
